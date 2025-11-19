@@ -1,121 +1,99 @@
-#include "stm32f10x.h"                  // Device header
+#include "Encoder.h"
 
-int16_t Encoder_Count;					//全局变量，用于计数旋转编码器的增量值
-
-/**
-  * 函    数：旋转编码器初始化
-  * 参    数：无
-  * 返 回 值：无
-  */
-void Encoder_Init(void)
+// --------------------------
+// 电机1：TIM3 (PA6/PA7)
+// --------------------------
+void Encoder1_Init(void)
 {
-	/*开启时钟*/
-	RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOB, ENABLE);		//开启GPIOB的时钟
-	RCC_APB2PeriphClockCmd(RCC_APB2Periph_AFIO, ENABLE);		//开启AFIO的时钟，外部中断必须开启AFIO的时钟
-	
-	/*GPIO初始化*/
-	GPIO_InitTypeDef GPIO_InitStructure;
-	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IPU;
-	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_0 | GPIO_Pin_1;
-	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
-	GPIO_Init(GPIOB, &GPIO_InitStructure);						//将PB0和PB1引脚初始化为上拉输入
-	
-	/*AFIO选择中断引脚*/
-	GPIO_EXTILineConfig(GPIO_PortSourceGPIOB, GPIO_PinSource0);//将外部中断的0号线映射到GPIOB，即选择PB0为外部中断引脚
-	GPIO_EXTILineConfig(GPIO_PortSourceGPIOB, GPIO_PinSource1);//将外部中断的1号线映射到GPIOB，即选择PB1为外部中断引脚
-	
-	/*EXTI初始化*/
-	EXTI_InitTypeDef EXTI_InitStructure;						//定义结构体变量
-	EXTI_InitStructure.EXTI_Line = EXTI_Line0 | EXTI_Line1;		//选择配置外部中断的0号线和1号线
-	EXTI_InitStructure.EXTI_LineCmd = ENABLE;					//指定外部中断线使能
-	EXTI_InitStructure.EXTI_Mode = EXTI_Mode_Interrupt;			//指定外部中断线为中断模式
-	EXTI_InitStructure.EXTI_Trigger = EXTI_Trigger_Falling;		//指定外部中断线为下降沿触发
-	EXTI_Init(&EXTI_InitStructure);								//将结构体变量交给EXTI_Init，配置EXTI外设
-	
-	/*NVIC中断分组*/
-	NVIC_PriorityGroupConfig(NVIC_PriorityGroup_2);				//配置NVIC为分组2
-																//即抢占优先级范围：0~3，响应优先级范围：0~3
-																//此分组配置在整个工程中仅需调用一次
-																//若有多个中断，可以把此代码放在main函数内，while循环之前
-																//若调用多次配置分组的代码，则后执行的配置会覆盖先执行的配置
-	
-	/*NVIC配置*/
-	NVIC_InitTypeDef NVIC_InitStructure;						//定义结构体变量
-	NVIC_InitStructure.NVIC_IRQChannel = EXTI0_IRQn;			//选择配置NVIC的EXTI0线
-	NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;				//指定NVIC线路使能
-	NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 1;	//指定NVIC线路的抢占优先级为1
-	NVIC_InitStructure.NVIC_IRQChannelSubPriority = 1;			//指定NVIC线路的响应优先级为1
-	NVIC_Init(&NVIC_InitStructure);								//将结构体变量交给NVIC_Init，配置NVIC外设
+    GPIO_InitTypeDef GPIO_InitStruct;
+    TIM_TimeBaseInitTypeDef TIM_TimeBaseInitStruct;
+    TIM_ICInitTypeDef TIM_ICInitStruct;
 
-	NVIC_InitStructure.NVIC_IRQChannel = EXTI1_IRQn;			//选择配置NVIC的EXTI1线
-	NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;				//指定NVIC线路使能
-	NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 1;	//指定NVIC线路的抢占优先级为1
-	NVIC_InitStructure.NVIC_IRQChannelSubPriority = 2;			//指定NVIC线路的响应优先级为2
-	NVIC_Init(&NVIC_InitStructure);								//将结构体变量交给NVIC_Init，配置NVIC外设
+    RCC_APB2PeriphClockCmd(ENCODER1_GPIO_RCC, ENABLE);
+    RCC_APB1PeriphClockCmd(ENCODER1_TIM_RCC, ENABLE);
+
+    GPIO_InitStruct.GPIO_Pin = ENCODER1_CHA_PIN | ENCODER1_CHB_PIN;
+    GPIO_InitStruct.GPIO_Mode = GPIO_Mode_IN_FLOATING;
+    GPIO_InitStruct.GPIO_Speed = GPIO_Speed_50MHz;
+    GPIO_Init(ENCODER1_GPIO_PORT, &GPIO_InitStruct);
+
+    TIM_TimeBaseInitStruct.TIM_Period = 65535;
+    TIM_TimeBaseInitStruct.TIM_Prescaler = 0;
+    TIM_TimeBaseInitStruct.TIM_ClockDivision = TIM_CKD_DIV1;
+    TIM_TimeBaseInitStruct.TIM_CounterMode = TIM_CounterMode_Up;
+    TIM_TimeBaseInit(ENCODER1_TIM, &TIM_TimeBaseInitStruct);
+
+    TIM_EncoderInterfaceConfig(ENCODER1_TIM, TIM_EncoderMode_TI12,
+                               TIM_ICPolarity_Rising, TIM_ICPolarity_Rising);
+
+    TIM_SetCounter(ENCODER1_TIM, 0);
+    TIM_Cmd(ENCODER1_TIM, ENABLE);
 }
 
-/**
-  * 函    数：旋转编码器获取增量值
-  * 参    数：无
-  * 返 回 值：自上此调用此函数后，旋转编码器的增量值
-  */
-int16_t Encoder_Get(void) {
-    int16_t Temp;
-    __disable_irq();  // 禁用中断
-    Temp = Encoder_Count;
-    Encoder_Count = 0;
-    __enable_irq();   // 启用中断
-    return Temp;
+int16_t Encoder1_Get(void)
+{
+    int16_t count = (int16_t)TIM_GetCounter(ENCODER1_TIM);
+    TIM_SetCounter(ENCODER1_TIM, 0);
+    return count;
 }
 
-/**
-  * 函    数：EXTI0外部中断函数
-  * 参    数：无
-  * 返 回 值：无
-  * 注意事项：此函数为中断函数，无需调用，中断触发后自动执行
-  *           函数名为预留的指定名称，可以从启动文件复制
-  *           请确保函数名正确，不能有任何差异，否则中断函数将不能进入
-  */
-void EXTI0_IRQHandler(void)
+int16_t Encoder1_GetCount(void)
 {
-	if (EXTI_GetITStatus(EXTI_Line0) == SET)		//判断是否是外部中断0号线触发的中断
-	{
-		/*如果出现数据乱跳的现象，可再次判断引脚电平，以避免抖动*/
-		if (GPIO_ReadInputDataBit(GPIOB, GPIO_Pin_0) == 0)
-		{
-			if (GPIO_ReadInputDataBit(GPIOB, GPIO_Pin_1) == 0)		//PB0的下降沿触发中断，此时检测另一相PB1的电平，目的是判断旋转方向
-			{
-				Encoder_Count --;					//此方向定义为反转，计数变量自减
-			}
-		}
-		EXTI_ClearITPendingBit(EXTI_Line0);			//清除外部中断0号线的中断标志位
-													//中断标志位必须清除
-													//否则中断将连续不断地触发，导致主程序卡死
-	}
+    return (int16_t)TIM_GetCounter(ENCODER1_TIM);
 }
 
-/**
-  * 函    数：EXTI1外部中断函数
-  * 参    数：无
-  * 返 回 值：无
-  * 注意事项：此函数为中断函数，无需调用，中断触发后自动执行
-  *           函数名为预留的指定名称，可以从启动文件复制
-  *           请确保函数名正确，不能有任何差异，否则中断函数将不能进入
-  */
-void EXTI1_IRQHandler(void)
+int Encoder1_GetRPM(int16_t pulse_10ms)
 {
-	if (EXTI_GetITStatus(EXTI_Line1) == SET)		//判断是否是外部中断1号线触发的中断
-	{
-		/*如果出现数据乱跳的现象，可再次判断引脚电平，以避免抖动*/
-		if (GPIO_ReadInputDataBit(GPIOB, GPIO_Pin_1) == 0)
-		{
-			if (GPIO_ReadInputDataBit(GPIOB, GPIO_Pin_0) == 0)		//PB1的下降沿触发中断，此时检测另一相PB0的电平，目的是判断旋转方向
-			{
-				Encoder_Count ++;					//此方向定义为正转，计数变量自增
-			}
-		}
-		EXTI_ClearITPendingBit(EXTI_Line1);			//清除外部中断1号线的中断标志位
-													//中断标志位必须清除
-													//否则中断将连续不断地触发，导致主程序卡死
-	}
+    if (pulse_10ms == 0) return 0;
+    float rpm = (float)pulse_10ms / ENCODER1_PULSES_REV * 6000.0f;
+    return (int)(rpm + 0.5f);  // 四舍五入，最小步进为 1 ✅
+}
+
+// --------------------------
+// 电机2：TIM4 (PB6/PB7)
+// --------------------------
+void Encoder2_Init(void)
+{
+    GPIO_InitTypeDef GPIO_InitStruct;
+    TIM_TimeBaseInitTypeDef TIM_TimeBaseInitStruct;
+    TIM_ICInitTypeDef TIM_ICInitStruct;
+
+    RCC_APB2PeriphClockCmd(ENCODER2_GPIO_RCC, ENABLE);
+    RCC_APB1PeriphClockCmd(ENCODER2_TIM_RCC, ENABLE);
+
+    GPIO_InitStruct.GPIO_Pin = ENCODER2_CHA_PIN | ENCODER2_CHB_PIN;
+    GPIO_InitStruct.GPIO_Mode = GPIO_Mode_IN_FLOATING;
+    GPIO_InitStruct.GPIO_Speed = GPIO_Speed_50MHz;
+    GPIO_Init(ENCODER2_GPIO_PORT, &GPIO_InitStruct);
+
+    TIM_TimeBaseInitStruct.TIM_Period = 65535;
+    TIM_TimeBaseInitStruct.TIM_Prescaler = 0;
+    TIM_TimeBaseInitStruct.TIM_ClockDivision = TIM_CKD_DIV1;
+    TIM_TimeBaseInitStruct.TIM_CounterMode = TIM_CounterMode_Up;
+    TIM_TimeBaseInit(ENCODER2_TIM, &TIM_TimeBaseInitStruct);
+
+    TIM_EncoderInterfaceConfig(ENCODER2_TIM, TIM_EncoderMode_TI12,
+                               TIM_ICPolarity_Rising, TIM_ICPolarity_Rising);
+
+    TIM_SetCounter(ENCODER2_TIM, 0);
+    TIM_Cmd(ENCODER2_TIM, ENABLE);
+}
+
+int16_t Encoder2_Get(void)
+{
+    int16_t count = (int16_t)TIM_GetCounter(ENCODER2_TIM);
+    TIM_SetCounter(ENCODER2_TIM, 0);
+    return count;
+}
+
+int16_t Encoder2_GetCount(void)
+{
+    return (int16_t)TIM_GetCounter(ENCODER2_TIM);
+}
+
+int Encoder2_GetRPM(int16_t pulse_10ms)
+{
+    if (pulse_10ms == 0) return 0;
+    float rpm = (float)pulse_10ms / ENCODER2_PULSES_REV * 6000.0f;
+    return (int)(rpm + 0.5f);  // 四舍五入，最小步进为 1 ✅
 }
