@@ -5,9 +5,9 @@
 
 // 按键定义
 #define KEY_COUNT 2
-#define KEY1_PIN GPIO_Pin_0
-#define KEY2_PIN GPIO_Pin_2
-#define KEY_PORT GPIOA
+#define KEY1_PIN GPIO_Pin_1
+#define KEY2_PIN GPIO_Pin_11
+#define KEY_PORT GPIOB
 
 // 按键状态
 typedef enum {

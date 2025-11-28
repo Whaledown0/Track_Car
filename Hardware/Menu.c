@@ -41,8 +41,7 @@ void Menu_HandleKeyEvent(uint8_t key_num, uint8_t event)
                 menu.current_state = MENU_AUTO_RUNNING;
                 Menu_UpdateDisplay();
                 
-                // 调用自动循迹启动函数（在主程序中实现）
-                // AutoTrack_Start(menu.speed_level);
+                
             }
             break;
             

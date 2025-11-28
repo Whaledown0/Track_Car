@@ -7,11 +7,11 @@
 #define IR_SENSOR_COUNT 5
 
 // 传感器引脚定义（请根据实际连接修改）
-#define IR1_PIN GPIO_Pin_3
-#define IR2_PIN GPIO_Pin_4
-#define IR3_PIN GPIO_Pin_5
-#define IR4_PIN GPIO_Pin_6
-#define IR5_PIN GPIO_Pin_7
+#define IR1_PIN GPIO_Pin_8
+#define IR2_PIN GPIO_Pin_9
+#define IR3_PIN GPIO_Pin_10
+#define IR4_PIN GPIO_Pin_11
+#define IR5_PIN GPIO_Pin_12
 #define IR_PORT GPIOA
 
 // 传感器状态

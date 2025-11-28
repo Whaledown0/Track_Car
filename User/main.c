@@ -9,17 +9,29 @@
 #include "ir_sensor.h"
 #include "Menu.h"
 
-extern volatile uint32_t system_tick;
-void AutoTrack_Run(int16_t base_speed);  
+// 注意：system_tick 通常由 SysTick 中断管理，如果由 TIM2 管理，请确保正确配置
+extern volatile uint32_t system_tick; 
 
-// ========== 创建两个PID控制器实例 ==========
-PID_TypeDef PID_Motor1, PID_Motor2;
+// ========== 创建PID控制器实例 ==========
+// 原有的电机控制器（此项目未使用，保留以防万一）
+PID_TypeDef PID_Motor1, PID_Motor2; 
+
+// 新增：转向控制器和速度控制器
+PID_TypeDef PID_Steering;   // 控制转向，输入为位置误差，输出为速度差
+PID_TypeDef PID_Track_Speed; // 控制循迹时的速度，使速度更平稳
+
+// 在main函数外部定义一个转换宏，方便调试时显示RPM值
+// 你需要替换 ENCODER1_PULSES_REV 和 ENCODER2_PULSES_REV 为你编码器的实际线数
+#define ENCODER_PULSES_PER_REV 2496.0f 
+
+#define PULSE_TO_RPM(pulses) (((float)(pulses) * 3600.0f) / (ENCODER_PULSES_PER_REV))
+
 
 int main(void)
 {
     // ----- 初始化所有外设 -----
     OLED_Init();                  // OLED 显示屏
-    Timer_Init();                 // 定时器
+    Timer_Init();                 // 定时器 (TIM2, 10ms中断)
     Encoder1_Init();              // 电机1 编码器
     Encoder2_Init();              // 电机2 编码器
     Motor_Init();                 // 电机驱动初始化
@@ -27,17 +39,30 @@ int main(void)
     IR_Sensor_Init();             // 红外传感器初始化
     
     // ----- 初始化PID控制器 -----
-    PID_Init(&PID_Motor1, 3.0f, 0.1f, 0.05f, -1200.0f, 1200.0f);
-    PID_Init(&PID_Motor2, 3.0f, 0.1f, 0.05f, -1200.0f, 1200.0f);
+    // 原有PID参数（本项目未使用）
+    PID_Init(&PID_Motor1, 3.0f, 0.1f, 0.05f, -4800.0f, 4800.0f);
+    PID_Init(&PID_Motor2, 3.0f, 0.1f, 0.05f, -4800.0f, 4800.0f);
+
+    // 新增：初始化转向PID控制器 (参数需要实际调试)
+    // Kp: 比例，影响响应速度和稳定性
+    // Ki: 积分，消除稳态误差
+    // Kd: 微分，抑制超调和振荡
+    // 输出范围: -1000 到 1000, 作为速度差加到左右电机上
+    PID_Init(&PID_Steering, 8.0f, 0.0f, 0.1f, -1000.0f, 1000.0f); 
     
+    // 新增：初始化循迹速度PID控制器 (参数需要实际调试)
+    // 目标是让电机的实际速度稳定在设定的 pulse/10ms 目标值上
+    PID_Init(&PID_Track_Speed, 0.5f, 0.1f, 0.02f, -2000.0f, 2000.0f);
+
     // ----- 初始化菜单系统 -----
     Menu_Init();
     
     // 显示欢迎信息
     OLED_Clear();
-    OLED_ShowString(1, 1, "Auto Track Car");
+    OLED_ShowString(1, 1, "PID Track Car Ver2");
     OLED_ShowString(2, 1, "System Ready");
     Delay_ms(1000);
+    OLED_Clear();
     Menu_UpdateDisplay();
 
     while (1)
@@ -57,108 +82,67 @@ int main(void)
             Menu_HandleKeyEvent(1, key2_event);
         }
         
-        // ===== 自动循迹模式处理 =====
+        // 在主循环中可以更新一些不紧急的显示信息
         if (Menu_IsAutoRunning()) {
-            // 读取红外传感器
-            IR_Sensor_Read();
-            
-            // 获取当前速度档位
-            uint8_t current_speed = Menu_GetSpeedLevel();
-            
-            // 根据速度档位设置基础速度
-            int16_t base_speed = 0;
-            switch(current_speed) {
-                case SPEED_LOW: base_speed = 300; break;
-                case SPEED_MEDIUM: base_speed = 500; break;
-                case SPEED_HIGH: base_speed = 800; break;
-                default: base_speed = 0; break;
-            }
-            
-            // 执行自动循迹算法
-            AutoTrack_Run(base_speed);
+            uint8_t pos = IR_GetPosition();
+            OLED_ShowString(1, 1, "Run:    ");
+            OLED_ShowNum(1, 5, pos, 1);
+        } else {
+            OLED_ShowString(1, 1, "Standby");
         }
         
-        Delay_ms(20);
+		
+		int a=Encoder1_GetSpeed()*10;
+		OLED_ShowNum(3,5,a,3);
+		
+		
+        Delay_ms(50); // 主循环可以适当降低频率
     }
 }
 
-
-
-// ===== TIM2 中断服务函数（PID控制）=====
 void TIM2_IRQHandler(void)
 {
-    static uint16_t Count;
     if (TIM_GetITStatus(TIM2, TIM_IT_Update) == SET)
     {
-        Count++;
-        if (Count >= 10)  // 10ms * 10 = 100ms 控制周期
-        {
-            Count = 0;
-
-            // 获取两个电机速度
-            int16_t pulse1 = Encoder1_Get();
-            float speed1 = Encoder1_GetRPM(pulse1);
-            
-            int16_t pulse2 = Encoder2_Get();
-            float speed2 = Encoder2_GetRPM(pulse2);
-            PID_Motor2.Speed = speed2;
-
-            // 电机1的目标速度 = 电机2的实际速度（跟随控制）
-            float target1 = speed2;
-            
-            // PID计算电机1输出
-            float output1 = PID_Calculate(&PID_Motor1, target1, speed1);
-            
-            // 特殊逻辑处理
-            float deltaOutput = output1 - PID_Motor1.Output;
-            if (deltaOutput > 0) {
-                output1 += 20;
-            } else if (deltaOutput < 0) {
-                output1 -= 25;
+        int16_t speed1_pulse = Encoder1_GetSpeed(); 
+        int16_t speed2_pulse = Encoder2_GetSpeed();
+        if (Menu_IsAutoRunning()) {
+            // ========== 1. 设置基础速度（油门）==========
+            // 这是一个固定的速度值，比如600（对应约144 RPM）
+            int16_t base_speed = 600; 
+            // ========== 2. 转向控制 ==========
+            uint8_t ir_position = IR_GetPosition();
+            float steering_error = 0.0f;
+            switch(ir_position) {
+                // 注意：这里的误差定义要确保和PID参数匹配
+                // 严重左偏 -> 负误差 -> 需要右转 (左电机快，右电机慢 -> 最终速度差为负)
+                case 0: steering_error = -2.0f; break; 
+                case 1: steering_error = -1.0f; break; 
+                case 2: steering_error = 0.0f; break; 
+                case 3: steering_error = 1.0f; break; 
+                case 4: steering_error = 2.0f; break; 
+                default: steering_error = 0.0f; break; 
             }
             
-            // 重新限制输出范围
-            output1 = Constrain(output1, -300.0f, 300.0f);
-            PID_Motor1.Output = output1;
+            // PID计算，输出一个速度差
+            // 这个差值将被加到左边电机，减到右边电机
+            int16_t steering_delta = (int16_t)PID_Calculate(&PID_Steering, 0.0f, steering_error);
+            // ========== 3. 最终合成电机速度 ==========
+            int16_t final_speed_left = base_speed + steering_delta;
+            int16_t final_speed_right = base_speed - steering_delta;
             
-            // 只有在自动运行模式下才设置电机速度
-            if (Menu_IsAutoRunning()) {
-                Motor1_SetSpeed((int)output1);
-            }
+            // 限幅，防止超出电机驱动能力 (-1000 到 1000)
+            final_speed_left = Constrain(final_speed_left, -1000, 1000);
+            final_speed_right = Constrain(final_speed_right, -1000, 1000);
+            // 设置电机
+            Motor1_SetSpeed(final_speed_left);
+            Motor2_SetSpeed(final_speed_right);
+        } else {
+            // 停止电机并重置PID
+            Motor1_SetSpeed(0);
+            Motor2_SetSpeed(0);
+            PID_Reset(&PID_Steering);
         }
         TIM_ClearITPendingBit(TIM2, TIM_IT_Update);
-    }
-}
-
-// 自动循迹运行函数
-void AutoTrack_Run(int16_t base_speed)
-{
-    uint8_t position = IR_GetPosition();
-    
-    // 根据红外传感器位置调整电机速度实现循迹
-    switch(position) {
-        case 0: // 严重偏右，大幅左转
-            Motor_SetSpeed(-base_speed * 30, base_speed * 70);
-            break;
-        case 1: // 偏右，左转
-            Motor_SetSpeed(-base_speed * 20, base_speed * 60);
-            break;
-        case 2: // 居中，直行
-            Motor_SetSpeed(base_speed, base_speed);
-            break;
-        case 3: // 偏左，右转
-            Motor_SetSpeed(base_speed * 60, -base_speed * 20);
-            break;
-        case 4: // 严重偏左，大幅右转
-            Motor_SetSpeed(base_speed * 70, -base_speed * 30);
-            break;
-        default: // 默认直行
-            Motor_SetSpeed(base_speed, base_speed);
-            break;
-    }
-    
-    // PID控制（如果需要）
-    if (base_speed > 0) {
-        PID_Motor2.Target = base_speed;
     }
 }
