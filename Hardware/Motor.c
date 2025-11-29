@@ -45,6 +45,7 @@ void Motor1_SetSpeed(int16_t Speed)
 {
     if (Speed > 1000) Speed = 1000;
     if (Speed < -1000) Speed = -1000;
+	Speed = Speed*0.07;
     if (Speed == 0) {
         // 刹车模式 (IN1=IN2=1)
         GPIO_SetBits(GPIOB, GPIO_Pin_12);
@@ -75,7 +76,7 @@ void Motor2_SetSpeed(int16_t Speed)
     if (Speed < -1000) Speed = -1000;
     // 注意：电机2的逻辑和电机1保持一致
     // 这是为了确保左右电机转向同步
-    Speed = -Speed;
+    Speed = -Speed*0.07*1.003;
     if (Speed == 0) {
         GPIO_SetBits(GPIOB, GPIO_Pin_14);
         GPIO_SetBits(GPIOB, GPIO_Pin_15);

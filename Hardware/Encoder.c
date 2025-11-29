@@ -1,7 +1,10 @@
 #include "Encoder.h"
+#include "stm32f10x_tim.h"
+#include "stm32f10x_gpio.h"
+#include "stm32f10x_rcc.h"
 
 // --------------------------
-// 电机1：TIM3 (PA6/PA7) - 已按方案一优化
+// 电机1：TIM3 (PA6/PA7) - 最高分辨率配置
 // --------------------------
 void Encoder1_Init(void)
 {
@@ -18,20 +21,22 @@ void Encoder1_Init(void)
     GPIO_InitStruct.GPIO_Mode = GPIO_Mode_IPU;
     GPIO_Init(ENCODER1_GPIO_PORT, &GPIO_InitStruct);
 
-    // 配置定时器基本参数 - 使用更大的周期
-    TIM_TimeBaseInitStruct.TIM_Period = 0xFFFF;  // 保持最大值
+    // 配置定时器基本参数
+    TIM_TimeBaseInitStruct.TIM_Period = 0xFFFF;
     TIM_TimeBaseInitStruct.TIM_Prescaler = 0;
     TIM_TimeBaseInitStruct.TIM_ClockDivision = TIM_CKD_DIV1;
     TIM_TimeBaseInitStruct.TIM_CounterMode = TIM_CounterMode_Up;
     TIM_TimeBaseInit(ENCODER1_TIM, &TIM_TimeBaseInitStruct);
 
-    // 关键修改：使用双边沿检测获得最高分辨率
-    TIM_EncoderInterfaceConfig(ENCODER1_TIM, TIM_EncoderMode_TI12,
-                               TIM_ICPolarity_BothEdge, TIM_ICPolarity_BothEdge);
+    // 配置编码器接口模式 - 使用双边沿检测获得最高分辨率
+    TIM_EncoderInterfaceConfig(ENCODER1_TIM, 
+                               TIM_EncoderMode_TI12,
+                               TIM_ICPolarity_BothEdge,
+                               TIM_ICPolarity_BothEdge);
 
-    // 配置输入滤波器减少噪声
+    // 配置输入捕获滤波器
     TIM_ICStructInit(&TIM_ICInitStruct);
-    TIM_ICInitStruct.TIM_ICFilter = 0x0F;  // 最大滤波
+    TIM_ICInitStruct.TIM_ICFilter = 0x0F;
     
     TIM_ICInitStruct.TIM_Channel = TIM_Channel_1;
     TIM_ICInit(ENCODER1_TIM, &TIM_ICInitStruct);
@@ -39,36 +44,41 @@ void Encoder1_Init(void)
     TIM_ICInitStruct.TIM_Channel = TIM_Channel_2;
     TIM_ICInit(ENCODER1_TIM, &TIM_ICInitStruct);
 
-    TIM_SetCounter(ENCODER1_TIM, 0);
     TIM_Cmd(ENCODER1_TIM, ENABLE);
-}
-
-/**
-  * @brief  获取电机1速度 (10ms脉冲数) 并清零
-  * @retval 速度值
-  */
-int16_t Encoder1_GetSpeed(void)
-{
-    // 读取当前计数值
-    int16_t count = (int16_t)TIM_GetCounter(ENCODER1_TIM);
-    // 读取后立即清零，为下一次10ms周期做准备
     TIM_SetCounter(ENCODER1_TIM, 0);
-    return count;
 }
 
 /**
-  * @brief  获取电机1当前计数值
+  * @brief  获取电机1当前计数值（只读不修改）
   * @retval 计数值
   */
 int16_t Encoder1_GetCount(void)
 {
-    // 只读取，不修改，用于调试时观察累积值
     return (int16_t)TIM_GetCounter(ENCODER1_TIM);
+}
+
+/**
+  * @brief  清零电机1计数器
+  */
+void Encoder1_ClearCount(void)
+{
+    TIM_SetCounter(ENCODER1_TIM, 0);
+}
+
+/**
+  * @brief  获取电机1速度 (10ms脉冲数) 并清零（保持原功能）
+  * @retval 速度值
+  */
+int16_t Encoder1_GetSpeed_Clear(void)
+{
+    int16_t count = (int16_t)TIM_GetCounter(ENCODER1_TIM);
+    TIM_SetCounter(ENCODER1_TIM, 0);
+    return count;
 }
 
 
 // --------------------------
-// 电机2：TIM4 (PB6/PB7) - 修改为与电机1一致的方案一配置
+// 电机2：TIM4 (PB6/PB7) - 最高分辨率配置
 // --------------------------
 void Encoder2_Init(void)
 {
@@ -80,26 +90,27 @@ void Encoder2_Init(void)
     RCC_APB2PeriphClockCmd(ENCODER2_GPIO_RCC, ENABLE);
     RCC_APB1PeriphClockCmd(ENCODER2_TIM_RCC, ENABLE);
 
-    // 配置GPIO为上拉输入（与电机1保持一致）
+    // 配置GPIO为上拉输入
     GPIO_InitStruct.GPIO_Pin = ENCODER2_CHA_PIN | ENCODER2_CHB_PIN;
-    GPIO_InitStruct.GPIO_Mode = GPIO_Mode_IPU;  // 上拉输入
-    GPIO_InitStruct.GPIO_Speed = GPIO_Speed_50MHz;
+    GPIO_InitStruct.GPIO_Mode = GPIO_Mode_IPU;
     GPIO_Init(ENCODER2_GPIO_PORT, &GPIO_InitStruct);
 
-    // 配置定时器基本参数（与电机1保持一致）
-    TIM_TimeBaseInitStruct.TIM_Period = 0xFFFF;  // 改为0xFFFF，与电机1一致
+    // 配置定时器基本参数
+    TIM_TimeBaseInitStruct.TIM_Period = 0xFFFF;
     TIM_TimeBaseInitStruct.TIM_Prescaler = 0;
     TIM_TimeBaseInitStruct.TIM_ClockDivision = TIM_CKD_DIV1;
     TIM_TimeBaseInitStruct.TIM_CounterMode = TIM_CounterMode_Up;
     TIM_TimeBaseInit(ENCODER2_TIM, &TIM_TimeBaseInitStruct);
 
-    // 关键修改：改为双边沿检测获得最高分辨率（与电机1保持一致）
-    TIM_EncoderInterfaceConfig(ENCODER2_TIM, TIM_EncoderMode_TI12,
-                               TIM_ICPolarity_BothEdge, TIM_ICPolarity_BothEdge);  // 改为BothEdge
+    // 配置编码器接口模式 - 使用双边沿检测获得最高分辨率
+    TIM_EncoderInterfaceConfig(ENCODER2_TIM, 
+                               TIM_EncoderMode_TI12,
+                               TIM_ICPolarity_BothEdge,
+                               TIM_ICPolarity_BothEdge);
 
-    // 配置输入捕获滤波器（与电机1保持一致）
+    // 配置输入捕获滤波器
     TIM_ICStructInit(&TIM_ICInitStruct);
-    TIM_ICInitStruct.TIM_ICFilter = 0x0F;  // 改为0x0F，与电机1保持一致
+    TIM_ICInitStruct.TIM_ICFilter = 0x0F;
     
     TIM_ICInitStruct.TIM_Channel = TIM_Channel_1;
     TIM_ICInit(ENCODER2_TIM, &TIM_ICInitStruct);
@@ -107,30 +118,49 @@ void Encoder2_Init(void)
     TIM_ICInitStruct.TIM_Channel = TIM_Channel_2;
     TIM_ICInit(ENCODER2_TIM, &TIM_ICInitStruct);
 
-    // 清空计数器并启动计数
-    TIM_SetCounter(ENCODER2_TIM, 0);
     TIM_Cmd(ENCODER2_TIM, ENABLE);
+    TIM_SetCounter(ENCODER2_TIM, 0);
 }
 
 /**
-  * @brief  获取电机2速度 (10ms脉冲数) 并清零
+  * @brief  获取电机2当前计数值（只读不修改）
+  * @retval 计数值
+  */
+int16_t Encoder2_GetCount(void)
+{
+    return (int16_t)TIM_GetCounter(ENCODER2_TIM);
+}
+
+/**
+  * @brief  清零电机2计数器
+  */
+void Encoder2_ClearCount(void)
+{
+    TIM_SetCounter(ENCODER2_TIM, 0);
+}
+
+/**
+  * @brief  获取电机2速度 (10ms脉冲数) 并清零（保持原功能）
   * @retval 速度值
   */
-int16_t Encoder2_GetSpeed(void)
+int16_t Encoder2_GetSpeed_Clear(void)
 {
-    // 读取当前计数值
     int16_t count = (int16_t)TIM_GetCounter(ENCODER2_TIM);
-    // 读取后立即清零，为下一次10ms周期做准备
     TIM_SetCounter(ENCODER2_TIM, 0);
     return count;
 }
 
 /**
-  * @brief  获取电机2当前计数值
-  * @retval 计数值
+  * @brief  同时读取两个电机的速度并自动清零
+  * @param  speed1: 存储电机1速度的指针
+  * @param  speed2: 存储电机2速度的指针
   */
-int16_t Encoder2_GetCount(void)
+void Encoder_GetBothSpeeds(int16_t *speed1, int16_t *speed2)
 {
-    // 只读取，不修改，用于调试时观察累积值
-    return (int16_t)TIM_GetCounter(ENCODER2_TIM);
+    *speed1 = (int16_t)TIM_GetCounter(ENCODER1_TIM);
+    *speed2 = (int16_t)TIM_GetCounter(ENCODER2_TIM);
+    
+    // 读取后自动清零两个计数器
+    TIM_SetCounter(ENCODER1_TIM, 0);
+    TIM_SetCounter(ENCODER2_TIM, 0);
 }

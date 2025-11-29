@@ -12,20 +12,27 @@
 // 注意：system_tick 通常由 SysTick 中断管理，如果由 TIM2 管理，请确保正确配置
 extern volatile uint32_t system_tick; 
 
+static int16_t g_speed1 = 0, g_speed2 = 0;
+static int16_t g_last_speed1 = 0, g_last_speed2 = 0;
+
 // ========== 创建PID控制器实例 ==========
 // 原有的电机控制器（此项目未使用，保留以防万一）
 PID_TypeDef PID_Motor1, PID_Motor2; 
 
 // 新增：转向控制器和速度控制器
-PID_TypeDef PID_Steering;   // 控制转向，输入为位置误差，输出为速度差
-PID_TypeDef PID_Track_Speed; // 控制循迹时的速度，使速度更平稳
+PID_TypeDef PID_Steering;        // 控制转向，输入为位置误差，输出为速度差
+PID_TypeDef PID_Track_Speed;     // 控制循迹时的速度，使速度更平稳
+PID_TypeDef PID_Follow;          // 新增：电机跟随控制器（叠加在转向控制上）
 
 // 在main函数外部定义一个转换宏，方便调试时显示RPM值
-// 你需要替换 ENCODER1_PULSES_REV 和 ENCODER2_PULSES_REV 为你编码器的实际线数
 #define ENCODER_PULSES_PER_REV 2496.0f 
-
 #define PULSE_TO_RPM(pulses) (((float)(pulses) * 3600.0f) / (ENCODER_PULSES_PER_REV))
 
+// 速度平滑滤波相关
+#define SMOOTH_FILTER_SIZE 5
+static int16_t speed1_buffer[SMOOTH_FILTER_SIZE] = {0};
+static int16_t speed2_buffer[SMOOTH_FILTER_SIZE] = {0};
+static uint8_t filter_index = 0;
 
 int main(void)
 {
@@ -43,26 +50,18 @@ int main(void)
     PID_Init(&PID_Motor1, 3.0f, 0.1f, 0.05f, -4800.0f, 4800.0f);
     PID_Init(&PID_Motor2, 3.0f, 0.1f, 0.05f, -4800.0f, 4800.0f);
 
-    // 新增：初始化转向PID控制器 (参数需要实际调试)
-    // Kp: 比例，影响响应速度和稳定性
-    // Ki: 积分，消除稳态误差
-    // Kd: 微分，抑制超调和振荡
-    // 输出范围: -1000 到 1000, 作为速度差加到左右电机上
-    PID_Init(&PID_Steering, 8.0f, 0.0f, 0.1f, -1000.0f, 1000.0f); 
+    // 新增：初始化转向PID控制器 - 增强转向幅度
+    PID_Init(&PID_Steering, 25.0f, 0.3f, 0.02f, -1800.0f, 1800.0f);  // 加大Kp和限幅
     
-    // 新增：初始化循迹速度PID控制器 (参数需要实际调试)
-    // 目标是让电机的实际速度稳定在设定的 pulse/10ms 目标值上
+    // 新增：初始化循迹速度PID控制器
     PID_Init(&PID_Track_Speed, 0.5f, 0.1f, 0.02f, -2000.0f, 2000.0f);
+
+    // 新增：初始化电机跟随PID控制器
+    PID_Init(&PID_Follow, 1.2f, 0.08f, 0.15f, -3000.0f, 3000.0f);
 
     // ----- 初始化菜单系统 -----
     Menu_Init();
     
-    // 显示欢迎信息
-    OLED_Clear();
-    OLED_ShowString(1, 1, "PID Track Car Ver2");
-    OLED_ShowString(2, 1, "System Ready");
-    Delay_ms(1000);
-    OLED_Clear();
     Menu_UpdateDisplay();
 
     while (1)
@@ -74,29 +73,19 @@ int main(void)
         uint8_t key1_event = Key_GetEvent(0);  // KEY1事件
         uint8_t key2_event = Key_GetEvent(1);  // KEY2事件
         
-        // ===== 处理按键事件 =====
+        // ===== 按键  =====
         if (key1_event != KEY_NO_EVENT) {
-            Menu_HandleKeyEvent(0, key1_event);
+            Menu_HandleKeyEvent(0, key1_event);  // 恢复KEY1处理
         }
         if (key2_event != KEY_NO_EVENT) {
-            Menu_HandleKeyEvent(1, key2_event);
+            Menu_HandleKeyEvent(1, key2_event);  // 保持KEY2处理
         }
+		
+//		Menu_UpdateDisplay();
         
-        // 在主循环中可以更新一些不紧急的显示信息
-        if (Menu_IsAutoRunning()) {
-            uint8_t pos = IR_GetPosition();
-            OLED_ShowString(1, 1, "Run:    ");
-            OLED_ShowNum(1, 5, pos, 1);
-        } else {
-            OLED_ShowString(1, 1, "Standby");
-        }
         
-		
-		int a=Encoder1_GetSpeed()*10;
-		OLED_ShowNum(3,5,a,3);
-		
-		
-        Delay_ms(50); // 主循环可以适当降低频率
+        
+        Delay_ms(50);
     }
 }
 
@@ -104,45 +93,94 @@ void TIM2_IRQHandler(void)
 {
     if (TIM_GetITStatus(TIM2, TIM_IT_Update) == SET)
     {
-        int16_t speed1_pulse = Encoder1_GetSpeed(); 
-        int16_t speed2_pulse = Encoder2_GetSpeed();
+        // ========== 改用分别读取，不清零 ==========
+        int16_t current_count1 = Encoder1_GetCount();
+        int16_t current_count2 = Encoder2_GetCount();
+        
+        // 计算增量速度（相对于上次读取的变化）
+        g_speed1 = current_count1 - g_last_speed1;
+        g_speed2 = current_count2 - g_last_speed2;
+        
+        // 更新上次值
+        g_last_speed1 = current_count1;
+        g_last_speed2 = current_count2;
+
         if (Menu_IsAutoRunning()) {
             // ========== 1. 设置基础速度（油门）==========
-            // 这是一个固定的速度值，比如600（对应约144 RPM）
             int16_t base_speed = 600; 
-            // ========== 2. 转向控制 ==========
+            
+            // ========== 2. 转向控制 - 停止一侧轮胎的原地转向 ==========
             uint8_t ir_position = IR_GetPosition();
-            float steering_error = 0.0f;
+            
+            // 方案：根据红外位置直接控制电机启停，实现原地转向
+            int16_t left_motor_speed = 0;
+            int16_t right_motor_speed = 0;
+            
             switch(ir_position) {
-                // 注意：这里的误差定义要确保和PID参数匹配
-                // 严重左偏 -> 负误差 -> 需要右转 (左电机快，右电机慢 -> 最终速度差为负)
-                case 0: steering_error = -2.0f; break; 
-                case 1: steering_error = -1.0f; break; 
-                case 2: steering_error = 0.0f; break; 
-                case 3: steering_error = 1.0f; break; 
-                case 4: steering_error = 2.0f; break; 
-                default: steering_error = 0.0f; break; 
+                case 0: // 严重左偏 - 停止左电机，右电机全速（原地右转）
+                    left_motor_speed = 0;      // 停止左电机
+                    right_motor_speed = base_speed;  // 右电机全速
+                    break;
+                    
+                case 1: // 轻微左偏 - 左电机低速，右电机高速（小半径右转）
+                    left_motor_speed = base_speed * 0.3f;   // 左电机30%速度
+                    right_motor_speed = base_speed;         // 右电机全速
+                    break;
+                    
+                case 2: // 正中 - 两轮同速直行
+                    left_motor_speed = base_speed;  // 左电机全速
+                    right_motor_speed = base_speed; // 右电机全速
+                    break;
+                    
+                case 3: // 轻微右偏 - 左电机高速，右电机低速（小半径左转）
+                    left_motor_speed = base_speed;         // 左电机全速
+                    right_motor_speed = base_speed * 0.3f;  // 右电机30%速度
+                    break;
+                    
+                case 4: // 严重右偏 - 停止右电机，左电机全速（原地左转）
+                    left_motor_speed = base_speed;  // 左电机全速
+                    right_motor_speed = 0;      // 停止右电机
+                    break;
+                    
+                default: // 默认直行
+                    left_motor_speed = base_speed;
+                    right_motor_speed = base_speed;
+                    break;
             }
             
-            // PID计算，输出一个速度差
-            // 这个差值将被加到左边电机，减到右边电机
-            int16_t steering_delta = (int16_t)PID_Calculate(&PID_Steering, 0.0f, steering_error);
-            // ========== 3. 最终合成电机速度 ==========
-            int16_t final_speed_left = base_speed + steering_delta;
-            int16_t final_speed_right = base_speed - steering_delta;
+            // ========== 3. 极端情况的强化转向（完全停止一侧）==========
+            if(ir_position == 0) {
+                // 严重左偏：完全停止左电机，右电机甚至可以超速
+                left_motor_speed = 0;                    // 完全停止左电机
+                right_motor_speed = base_speed * 1.1f;   // 右电机110%速度（如果电机支持）
+            } 
+            else if(ir_position == 4) {
+                // 严重右偏：完全停止右电机，左电机甚至可以超速
+                left_motor_speed = base_speed * 1.1f;   // 左电机110%速度
+                right_motor_speed = 0;                   // 完全停止右电机
+            }
             
-            // 限幅，防止超出电机驱动能力 (-1000 到 1000)
-            final_speed_left = Constrain(final_speed_left, -1000, 1000);
-            final_speed_right = Constrain(final_speed_right, -1000, 1000);
-            // 设置电机
-            Motor1_SetSpeed(final_speed_left);
-            Motor2_SetSpeed(final_speed_right);
+            // ========== 4. 限幅保护 ==========
+            left_motor_speed = Constrain(left_motor_speed, 0, 1000);
+            right_motor_speed = Constrain(right_motor_speed, 0, 1000);
+            
+            // ========== 5. 设置电机 - 实现停止一侧轮胎的转向 ==========
+            Motor1_SetSpeed(left_motor_speed);   // 左电机
+            Motor2_SetSpeed(right_motor_speed);  // 右电机
+            
         } else {
-            // 停止电机并重置PID
             Motor1_SetSpeed(0);
             Motor2_SetSpeed(0);
             PID_Reset(&PID_Steering);
+            PID_Reset(&PID_Follow);
+            
+            // 停止时清零速度记录
+            g_speed1 = 0;
+            g_speed2 = 0;
+            g_last_speed1 = 0;
+            g_last_speed2 = 0;
         }
+        
         TIM_ClearITPendingBit(TIM2, TIM_IT_Update);
     }
 }
